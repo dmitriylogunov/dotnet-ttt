@@ -1,0 +1,329 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tic-Tac-Toe</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/8.0.7/signalr.min.js"></script>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: 'Segoe UI', system-ui, sans-serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+        }
+
+        .container {
+            text-align: center;
+            max-width: 400px;
+            width: 100%;
+            padding: 20px;
+        }
+
+        h1 {
+            font-size: 2rem;
+            margin-bottom: 20px;
+            color: #e94560;
+        }
+
+        /* --- Screens (show/hide) --- */
+        .screen { display: none; }
+        .screen.active { display: block; }
+
+        /* --- Menu --- */
+        .menu-btn {
+            display: block;
+            width: 100%;
+            padding: 14px;
+            margin: 10px 0;
+            font-size: 1.1rem;
+            border: 2px solid #e94560;
+            background: transparent;
+            color: #e94560;
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        .menu-btn:hover {
+            background: #e94560;
+            color: #fff;
+        }
+
+        /* --- Name input --- */
+        .name-input {
+            width: 100%;
+            padding: 12px;
+            font-size: 1rem;
+            border: 2px solid #444;
+            border-radius: 8px;
+            background: #16213e;
+            color: #e0e0e0;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+        .name-input:focus { outline: none; border-color: #e94560; }
+
+        /* --- Status bar --- */
+        #status {
+            font-size: 1.1rem;
+            margin: 15px 0;
+            min-height: 24px;
+            color: #aaa;
+        }
+
+        /* --- Board --- */
+        .board {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 4px;
+            max-width: 300px;
+            margin: 0 auto;
+        }
+
+        .cell {
+            aspect-ratio: 1;
+            background: #16213e;
+            border: none;
+            border-radius: 6px;
+            font-size: 2.5rem;
+            color: #e0e0e0;
+            cursor: pointer;
+            transition: background 0.15s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .cell:hover:not(.taken) { background: #1a1a3e; }
+        .cell.taken { cursor: default; }
+        .cell.x { color: #e94560; }
+        .cell.o { color: #0f3460; }
+        .cell.win { background: #e9456033; animation: pulse 0.6s ease-in-out 2; }
+
+        @keyframes pulse {
+            50% { background: #e9456066; }
+        }
+
+        /* --- Back / info --- */
+        .back-btn {
+            margin-top: 20px;
+            padding: 8px 20px;
+            background: transparent;
+            border: 1px solid #555;
+            color: #aaa;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        .back-btn:hover { border-color: #e94560; color: #e94560; }
+
+        .game-code {
+            font-size: 0.8rem;
+            color: #555;
+            margin-top: 8px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Tic-Tac-Toe</h1>
+
+        <!-- Name Entry -->
+        <div id="name-screen" class="screen active">
+            <p style="margin-bottom: 10px; color: #aaa;">Enter your name</p>
+            <input type="text" id="name-input" class="name-input" placeholder="Guest"
+                   maxlength="20" autofocus>
+            <button class="menu-btn" onclick="joinGame()">Play</button>
+        </div>
+
+        <!-- Game -->
+        <div id="game-screen" class="screen">
+            <div id="status">Connecting...</div>
+            <div class="board" id="board"></div>
+            <div class="game-code" id="game-code"></div>
+            <button class="back-btn" onclick="leaveGame()">Leave</button>
+        </div>
+    </div>
+
+    <script>
+        // ── State ──
+        let connection = null;
+        let mySymbol = null;
+        let myTurn = false;
+        let gameActive = false;
+
+        const SYMBOLS = { x: '✕', o: '○' };
+
+        // ── Screen management ──
+        function showScreen(id) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+        }
+
+        function showNameScreen() {
+            showScreen('name-screen');
+            const input = document.getElementById('name-input');
+            input.value = localStorage.getItem('ttt_player_name') || '';
+            input.focus();
+        }
+
+        // Auto-fill saved name on load
+        document.getElementById('name-input').value = localStorage.getItem('ttt_player_name') || '';
+
+        // ── Build board ──
+        function buildBoard() {
+            const board = document.getElementById('board');
+            board.innerHTML = '';
+            for (let i = 1; i <= 9; i++) {
+                const cell = document.createElement('button');
+                cell.className = 'cell';
+                cell.dataset.id = `c${i}`;
+                cell.onclick = () => onCellClick(`c${i}`);
+                board.appendChild(cell);
+            }
+        }
+
+        function setStatus(msg) {
+            document.getElementById('status').textContent = msg;
+        }
+
+        function markCell(cellId, symbol) {
+            const cell = document.querySelector(`[data-id="${cellId}"]`);
+            if (!cell) return;
+            cell.textContent = SYMBOLS[symbol];
+            cell.classList.add('taken', symbol);
+        }
+
+        function highlightCells(cells) {
+            if (!cells) return;
+            cells.forEach(id => {
+                const cell = document.querySelector(`[data-id="${id}"]`);
+                if (cell) cell.classList.add('win');
+            });
+        }
+
+        // ── Actions ──
+        function onCellClick(cellId) {
+            if (!myTurn || !gameActive) return;
+            const cell = document.querySelector(`[data-id="${cellId}"]`);
+            if (cell.classList.contains('taken')) return;
+
+            // Optimistic local update
+            markCell(cellId, mySymbol);
+            myTurn = false;
+            setStatus("Opponent's turn");
+
+            connection.invoke('MakeTurn', cellId).catch(err => {
+                console.error('MakeTurn failed:', err);
+                setStatus('Error sending move');
+            });
+        }
+
+        function joinGame() {
+            const name = document.getElementById('name-input').value.trim() || 'Guest';
+            localStorage.setItem('ttt_player_name', name);
+
+            buildBoard();
+            showScreen('game-screen');
+            setStatus('Connecting...');
+            document.getElementById('game-code').textContent = '';
+
+            startConnection(name);
+        }
+
+        function leaveGame() {
+            gameActive = false;
+            if (connection) {
+                connection.stop();
+                connection = null;
+            }
+            showNameScreen();
+        }
+
+        // ── SignalR ──
+        function startConnection(playerName) {
+            connection = new signalR.HubConnectionBuilder()
+                .withUrl('/gamehub')
+                .withAutomaticReconnect()
+                .build();
+
+            // Server: waiting for a second player
+            connection.on('WaitingForOpponent', (data) => {
+                setStatus('Waiting for opponent...');
+                document.getElementById('game-code').textContent = `Game: ${data.gameCode}`;
+            });
+
+            // Server: both players matched
+            connection.on('PairPlayers', (data) => {
+                mySymbol = data.symbol;
+                myTurn = data.yourTurn;
+                gameActive = true;
+                document.getElementById('game-code').textContent = `Game: ${data.gameCode}`;
+                setStatus(myTurn
+                    ? `You are ${SYMBOLS[mySymbol]}. Your turn!`
+                    : `You are ${SYMBOLS[mySymbol]}. ${data.opponent.name}'s turn`);
+            });
+
+            // Server: opponent made a move
+            connection.on('OpponentTurn', (data) => {
+                const oppSymbol = mySymbol === 'x' ? 'o' : 'x';
+                markCell(data.cellId, oppSymbol);
+                myTurn = true;
+                setStatus('Your turn!');
+            });
+
+            // Server: game over
+            connection.on('GameOver', (data) => {
+                gameActive = false;
+                myTurn = false;
+                highlightCells(data.winningCells);
+                setStatus(data.message);
+            });
+
+            // Server: opponent left
+            connection.on('OpponentDisconnected', (data) => {
+                gameActive = false;
+                myTurn = false;
+                setStatus(data.message);
+            });
+
+            // Server: no room
+            connection.on('ServerFull', (data) => {
+                setStatus(data.message);
+            });
+
+            // Server: invalid move
+            connection.on('TurnError', (data) => {
+                setStatus(`Error: ${data.error}`);
+                myTurn = true; // let them retry
+            });
+
+            connection.start()
+                .then(() => {
+                    setStatus('Connected. Looking for game...');
+                    return connection.invoke('NewPlayer', playerName);
+                })
+                .catch(err => {
+                    console.error('Connection failed:', err);
+                    setStatus('Failed to connect to server');
+                });
+        }
+
+        // ── Keyboard shortcuts ──
+        document.getElementById('name-input').addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') joinGame();
+            if (e.key === 'Escape') showNameScreen();
+        });
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && document.getElementById('game-screen').classList.contains('active')) {
+                leaveGame();
+            }
+        });
+    </script>
+</body>
+</html>
