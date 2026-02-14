@@ -70,15 +70,16 @@ public class GameService
                 return null;
 
             Player? opponent = null;
+            var game = player.Game;
 
-            if (player.Game is not null)
+            if (game is not null)
             {
-                opponent = player.Game.GetOpponent(player);
-                player.Game.RemovePlayer(player);
+                opponent = game.GetOpponent(player);
+                game.RemovePlayer(player);
 
                 // Clean up empty games
-                if (player.Game.IsEmpty)
-                    _games.Remove(player.Game);
+                if (game.IsEmpty)
+                    _games.Remove(game);
             }
 
             _players.Remove(connectionId);
