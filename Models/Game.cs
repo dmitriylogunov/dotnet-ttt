@@ -2,12 +2,18 @@ namespace TicTacToe.Models;
 
 public class Game
 {
+    public const int MaxMovesOnBoard = 4;
+    public const int TurnTimeoutSeconds = 4;
+
     private static readonly string[][] WinSets =
     [
         ["c1", "c2", "c3"], ["c4", "c5", "c6"], ["c7", "c8", "c9"], // rows
         ["c1", "c4", "c7"], ["c2", "c5", "c8"], ["c3", "c6", "c9"], // cols
         ["c1", "c5", "c9"], ["c3", "c5", "c7"]                      // diagonals
     ];
+
+    private readonly List<string> _xMoveHistory = [];
+    private readonly List<string> _oMoveHistory = [];
 
     public string Code { get; } = GenerateCode();
     public Dictionary<string, string?> Field { get; } = new()
@@ -69,18 +75,40 @@ public class Game
         if (Field[cellId] is not null)
             return TurnResult.Fail("Cell already taken.");
 
+        // Place the move and track it per player
         Field[cellId] = player.Symbol;
+        var history = player.Symbol == "x" ? _xMoveHistory : _oMoveHistory;
+        history.Add(cellId);
+
+        // Remove the oldest move of THIS player if they exceed the limit
+        string? clearedCellId = null;
+        if (history.Count > MaxMovesOnBoard)
+        {
+            clearedCellId = history[0];
+            Field[clearedCellId] = null;
+            history.RemoveAt(0);
+        }
+
         var result = CheckWinner();
 
         if (result is not null)
         {
             Status = GameStatus.Finished;
-            return result;
+            return result with { ClearedCellId = clearedCellId };
         }
 
         // Switch turn
         CurrentTurn = CurrentTurn == "x" ? "o" : "x";
-        return TurnResult.Ok();
+        return TurnResult.Ok(clearedCellId);
+    }
+
+    /// <summary>
+    /// Skip the current player's turn (called on timeout). No piece is placed.
+    /// </summary>
+    public void SkipTurn()
+    {
+        if (Status != GameStatus.Playing) return;
+        CurrentTurn = CurrentTurn == "x" ? "o" : "x";
     }
 
     private TurnResult? CheckWinner()
@@ -120,9 +148,9 @@ public class Game
 
 public enum GameStatus { Waiting, Playing, Finished }
 
-public record TurnResult(bool Success, string? ErrorMessage, string? WinnerSymbol, string[]? WinningCells, bool IsDraw)
+public record TurnResult(bool Success, string? ErrorMessage, string? WinnerSymbol, string[]? WinningCells, bool IsDraw, string? ClearedCellId = null)
 {
-    public static TurnResult Ok() => new(true, null, null, null, false);
+    public static TurnResult Ok(string? clearedCellId = null) => new(true, null, null, null, false, clearedCellId);
     public static TurnResult Fail(string error) => new(false, error, null, null, false);
     public static TurnResult Win(string symbol, string[] cells) => new(true, null, symbol, cells, false);
     public static TurnResult Draw() => new(true, null, null, null, true);

@@ -24,6 +24,13 @@ else
     <div class="game-screen">
         <div class="status">@statusMessage</div>
 
+        @if (gameActive && countdownValue > 0)
+        {
+            <div class="countdown-container">
+                <span class="countdown-number" @key="countdownKey">@countdownValue</span>
+            </div>
+        }
+
         <div class="board">
             @for (int i = 1; i <= 9; i++)
             {
@@ -75,6 +82,11 @@ else
     string[]? winningCells;
     ElementReference nameInputRef;
 
+    // ── Countdown state ──
+    int countdownValue;
+    int countdownKey;
+    Timer? countdownTimer;
+
     static Dictionary<string, string?> NewBoard()
     {
         var b = new Dictionary<string, string?>();
@@ -91,7 +103,32 @@ else
     public void Dispose()
     {
         GameService.OnPlayerEvent -= HandleGameEvent;
+        StopCountdown();
         GameService.RemovePlayer(playerId);
+    }
+
+    // ── Countdown helpers ──
+    void StartCountdown()
+    {
+        StopCountdown();
+        countdownValue = Game.TurnTimeoutSeconds;
+        countdownKey++;
+        countdownTimer = new Timer(_ => InvokeAsync(() =>
+        {
+            countdownValue--;
+            countdownKey++;
+            if (countdownValue <= 0)
+            {
+                StopCountdown();
+            }
+            StateHasChanged();
+        }), null, 1000, 1000);
+    }
+
+    void StopCountdown()
+    {
+        countdownTimer?.Dispose();
+        countdownTimer = null;
     }
 
     // ── Event handler (called from GameService on any thread) ──
@@ -116,13 +153,30 @@ else
                     statusMessage = myTurn
                         ? $"You are {Symbols[mySymbol]}. Your turn!"
                         : $"You are {Symbols[mySymbol]}. {e.OpponentName}'s turn";
+                    StartCountdown();
+                    break;
+
+                case YourMoveClearedEvent e:
+                    if (e.ClearedCellId is not null)
+                        board[e.ClearedCellId] = null;
                     break;
 
                 case OpponentMovedEvent e:
                     var oppSymbol = mySymbol == "x" ? "o" : "x";
                     board[e.CellId] = oppSymbol;
+                    if (e.ClearedCellId is not null)
+                        board[e.ClearedCellId] = null;
                     myTurn = true;
                     statusMessage = "Your turn!";
+                    StartCountdown();
+                    break;
+
+                case TurnTimedOutEvent e:
+                    myTurn = e.YourTurnNow;
+                    statusMessage = e.YourTurnNow
+                        ? "Opponent timed out! Your turn!"
+                        : "Time's up! Turn skipped.";
+                    StartCountdown();
                     break;
 
                 case GameOverEvent e:
@@ -130,12 +184,16 @@ else
                     myTurn = false;
                     winningCells = e.WinningCells;
                     statusMessage = e.Message;
+                    StopCountdown();
+                    countdownValue = 0;
                     break;
 
                 case OpponentDisconnectedEvent e:
                     gameActive = false;
                     myTurn = false;
                     statusMessage = e.Message;
+                    StopCountdown();
+                    countdownValue = 0;
                     break;
 
                 case ServerFullEvent e:
@@ -177,11 +235,16 @@ else
         statusMessage = "Opponent's turn";
 
         GameService.PlayTurn(playerId, cellId);
+
+        // Restart countdown for opponent's turn
+        StartCountdown();
     }
 
     void LeaveGame()
     {
         gameActive = false;
+        StopCountdown();
+        countdownValue = 0;
         GameService.RemovePlayer(playerId);
         playerId = Guid.NewGuid().ToString(); // fresh id for next game
         screen = Screen.NameEntry;

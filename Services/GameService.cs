@@ -13,6 +13,7 @@ public class GameService
 
     private readonly Dictionary<string, Player> _players = new();
     private readonly List<Game> _games = [];
+    private readonly Dictionary<string, Timer> _turnTimers = new();
     private readonly object _lock = new();
 
     /// <summary>
@@ -62,6 +63,9 @@ public class GameService
                 Notify(p.ConnectionId, new GameStartedEvent(
                     opponent.Name, p.Symbol!, p.Symbol == game.CurrentTurn, game.Code));
             }
+
+            // Start the turn timer
+            StartTurnTimer(game);
         }
     }
 
@@ -89,22 +93,33 @@ public class GameService
                 return;
             }
 
+            // Notify the current player about cleared cell (if any)
+            if (result.ClearedCellId is not null)
+                Notify(playerId, new YourMoveClearedEvent(result.ClearedCellId));
+
             // Relay move to opponent
             if (opponent is not null)
-                Notify(opponent.ConnectionId, new OpponentMovedEvent(cellId));
+                Notify(opponent.ConnectionId, new OpponentMovedEvent(cellId, result.ClearedCellId));
 
             // Game over?
             if (result.WinnerSymbol is not null)
             {
+                CancelTurnTimer(game);
                 Notify(playerId, new GameOverEvent("win", "You win!", result.WinningCells));
                 if (opponent is not null)
                     Notify(opponent.ConnectionId, new GameOverEvent("lose", "You lose!", result.WinningCells));
             }
             else if (result.IsDraw)
             {
+                CancelTurnTimer(game);
                 Notify(playerId, new GameOverEvent("draw", "It's a draw!", null));
                 if (opponent is not null)
                     Notify(opponent.ConnectionId, new GameOverEvent("draw", "It's a draw!", null));
+            }
+            else
+            {
+                // Restart turn timer for the next player
+                StartTurnTimer(game);
             }
         }
     }
@@ -124,6 +139,7 @@ public class GameService
 
             if (game is not null)
             {
+                CancelTurnTimer(game);
                 opponent = game.GetOpponent(player);
                 game.RemovePlayer(player);
 
@@ -135,6 +151,47 @@ public class GameService
 
             if (opponent is not null)
                 Notify(opponent.ConnectionId, new OpponentDisconnectedEvent("Your opponent disconnected."));
+        }
+    }
+
+    // ── Turn timer management ──
+
+    private void StartTurnTimer(Game game)
+    {
+        CancelTurnTimer(game);
+        var gameCode = game.Code;
+        var timer = new Timer(_ => OnTurnTimeout(gameCode), null,
+            Game.TurnTimeoutSeconds * 1000, Timeout.Infinite);
+        _turnTimers[gameCode] = timer;
+    }
+
+    private void CancelTurnTimer(Game game)
+    {
+        if (_turnTimers.Remove(game.Code, out var timer))
+            timer.Dispose();
+    }
+
+    private void OnTurnTimeout(string gameCode)
+    {
+        lock (_lock)
+        {
+            var game = _games.FirstOrDefault(g => g.Code == gameCode);
+            if (game is null || game.Status != GameStatus.Playing) return;
+
+            // Identify current player and opponent before skipping
+            var currentPlayer = game.Players.FirstOrDefault(p => p.Symbol == game.CurrentTurn);
+            var opponent = currentPlayer is not null ? game.GetOpponent(currentPlayer) : null;
+
+            game.SkipTurn();
+
+            // Notify both players
+            if (currentPlayer is not null)
+                Notify(currentPlayer.ConnectionId, new TurnTimedOutEvent(false));
+            if (opponent is not null)
+                Notify(opponent.ConnectionId, new TurnTimedOutEvent(true));
+
+            // Restart timer for the next player's turn
+            StartTurnTimer(game);
         }
     }
 

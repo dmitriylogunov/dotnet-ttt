@@ -41,9 +41,35 @@
 /* ── Status ── */
 .status {
     font-size: 1.1rem;
-    margin: 15px 0;
+    margin: 15px 0 5px;
     min-height: 24px;
     color: #aaa;
+}
+
+/* ── Countdown ── */
+.countdown-container {
+    height: 70px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+    margin-bottom: 4px;
+}
+
+.countdown-number {
+    font-size: 2.8rem;
+    font-weight: 900;
+    color: #e94560;
+    animation: countdown-boom 0.9s ease-out forwards;
+    pointer-events: none;
+    user-select: none;
+    text-shadow: 0 0 20px rgba(233, 69, 96, 0.6);
+}
+
+@keyframes countdown-boom {
+    0%   { transform: scale(0.6); opacity: 1; }
+    40%  { transform: scale(1.6); opacity: 0.9; }
+    100% { transform: scale(2.8); opacity: 0; }
 }
 
 /* ── Board ── */
