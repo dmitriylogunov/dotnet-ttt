@@ -3,11 +3,13 @@
 ## Layers
 
 ```
-Program.cs          → wiring (DI, middleware, hub route)
-Models/             → data + rules (Game, Player, TurnResult)
-Services/           → orchestration (matchmaking, state, thread safety)
-Hubs/               → real-time transport (SignalR ↔ browser)
-wwwroot/index.html  → client (vanilla HTML/JS)
+Program.cs                          → wiring (DI, middleware, Blazor route)
+Models/                             → data + rules (Game, Player, TurnResult, GameEvents)
+Services/                           → orchestration (matchmaking, state, events)
+Components/App.razor                → root HTML document
+Components/Layout/MainLayout.razor  → shared layout (container + heading)
+Components/Pages/Home.razor         → game UI (name entry, board, status — all C#)
+wwwroot/app.css                     → global styles
 ```
 
 ---
@@ -16,11 +18,11 @@ wwwroot/index.html  → client (vanilla HTML/JS)
 
 Three things are wired:
 
-- **SignalR** — real-time WebSocket communication
+- **Razor Components + Interactive Server** — Blazor Server mode (uses SignalR under the hood for real-time UI)
 - **`GameService`** — registered as a **singleton** (one shared instance, all state in memory)
-- **Hub route** — `/gamehub` is the WebSocket endpoint clients connect to
+- **`MapRazorComponents<App>()`** — serves the Blazor app with server-side interactivity
 
-`UseDefaultFiles()` + `UseStaticFiles()` serve `wwwroot/index.html` as the client.
+`UseStaticFiles()` serves `wwwroot/app.css`. `UseAntiforgery()` is required by Blazor.
 
 ---
 
@@ -30,7 +32,7 @@ Three things are wired:
 
 | Property | Type | Purpose |
 |----------|------|---------|
-| `ConnectionId` | `string` | SignalR's unique WebSocket ID (like Socket.IO's `socket.id`) |
+| `ConnectionId` | `string` | Unique player ID (a GUID generated per Blazor component instance) |
 | `Name` | `string` | Display name entered by the user |
 | `Symbol` | `string?` | `"x"` or `"o"`, assigned on game join |
 | `Game` | `Game?` | Back-reference to the game they're in |
@@ -57,59 +59,89 @@ Three things are wired:
 
 Factory methods: `Ok()`, `Fail(error)`, `Win(symbol, cells)`, `Draw()` — clean way to return multiple outcomes from one method.
 
+### `GameEvents.cs`
+
+Typed event records for inter-player communication. Each event is a C# record inheriting from `GameEvent`:
+
+| Event | Payload | When |
+|-------|---------|------|
+| `WaitingForOpponentEvent` | `GameCode` | First player matched, waiting |
+| `GameStartedEvent` | `OpponentName, Symbol, YourTurn, GameCode` | Two players matched |
+| `OpponentMovedEvent` | `CellId` | Opponent made a valid move |
+| `GameOverEvent` | `Result, Message, WinningCells?` | Win / lose / draw |
+| `OpponentDisconnectedEvent` | `Message` | Other player left |
+| `ServerFullEvent` | `Message` | Max games reached |
+| `TurnErrorEvent` | `Error` | Invalid move rejected |
+
 ---
 
 ## 3. Service — `GameService.cs`
 
-Orchestration layer between the hub and models. Owns all state.
+Orchestration layer between Blazor components and models. Owns all state.
 
 | Field | Purpose |
 |-------|---------|
-| `_players` | `Dictionary<ConnectionId, Player>` |
+| `_players` | `Dictionary<playerId, Player>` |
 | `_games` | `List<Game>` |
-| `_lock` | All operations are `lock`-ed (SignalR is multi-threaded) |
+| `_lock` | All operations are `lock`-ed (Blazor Server is multi-threaded) |
+| `OnPlayerEvent` | `event Action<string, GameEvent>` — fires typed events to subscribers |
 
 ### Methods
 
-**`AddPlayer(connectionId, name)`** — FIFO matchmaking:
+**`JoinGame(playerId, name)`** — FIFO matchmaking:
 1. Create a `Player`
 2. Find any game with `Status == Waiting`
 3. If none, create a new `Game` (unless `MaxConcurrentGames` reached)
 4. Add player to game
-5. Return whether game started (2 players now)
+5. Fire `WaitingForOpponentEvent` or `GameStartedEvent` (to both players)
 
-**`MakeTurn(connectionId, cellId)`** — look up player, delegate to `Game.MakeTurn()`, return result + opponent
+**`PlayTurn(playerId, cellId)`** — look up player, delegate to `Game.MakeTurn()`, fire `OpponentMovedEvent` + `GameOverEvent` or `TurnErrorEvent`
 
-**`RemovePlayer(connectionId)`** — remove from game, clean up empty games, return opponent for notification
+**`RemovePlayer(playerId)`** — remove from game, clean up empty games, fire `OpponentDisconnectedEvent` to opponent
+
+### Event-driven pattern
+
+Instead of returning data to a hub, the service fires `OnPlayerEvent(playerId, event)`. Each Blazor component subscribes in `OnInitialized()` and filters by its own `playerId`. Events are dispatched via `InvokeAsync()` + `StateHasChanged()` to safely update the UI across threads.
 
 ---
 
-## 4. Hub — `GameHub.cs`
+## 4. Blazor Components
 
-Translates WebSocket messages ↔ service calls. Uses primary constructor DI.
+### `App.razor` — Root document
 
-### Client → Server
+The HTML shell (`<html>`, `<head>`, `<body>`). Loads:
+- `app.css` (global styles)
+- `TicTacToe.styles.css` (auto-generated CSS isolation bundle)
+- `blazor.web.js` (Blazor framework — manages the SignalR circuit)
 
-| Method | Trigger | Action |
-|--------|---------|--------|
-| `NewPlayer(name)` | Client clicks "Play" | Matchmake → send `WaitingForOpponent` or `PairPlayers` |
-| `MakeTurn(cellId)` | Client clicks a cell | Validate → relay `OpponentTurn` or `GameOver` |
+Sets `@rendermode="InteractiveServer"` on both `<HeadOutlet>` and `<Routes>`.
 
-### Server → Client
+### `MainLayout.razor` — Layout wrapper
 
-| Event | Payload | When |
-|-------|---------|------|
-| `WaitingForOpponent` | `{ gameCode }` | First player matched, waiting |
-| `PairPlayers` | `{ opponent, symbol, gameCode, yourTurn }` | Two players matched |
-| `OpponentTurn` | `{ cellId }` | Opponent made a valid move |
-| `GameOver` | `{ result, message, winningCells }` | Win / lose / draw |
-| `OpponentDisconnected` | `{ message }` | Other player left |
-| `ServerFull` | `{ message }` | Max games reached |
-| `TurnError` | `{ error }` | Invalid move rejected |
+Renders the `.container` div and `<h1>` heading, then `@Body` for page content.
 
-### `OnDisconnectedAsync()`
+### `Home.razor` — Game page (`@page "/"`)
 
-Automatic SignalR override — fires on WebSocket drop. Cleans up player, notifies opponent.
+All game logic in C# — no JavaScript. Manages two screens:
+
+**Name Entry screen:**
+- Text input bound to `playerName`
+- "Play" button calls `JoinGame()`
+
+**Game screen:**
+- Status message (`statusMessage`)
+- 3×3 board rendered with a `@for` loop — each cell is a `<button>` with conditional CSS classes
+- Game code display
+- "Leave" button calls `LeaveGame()`
+
+**Key lifecycle:**
+- `OnInitialized()` — subscribes to `GameService.OnPlayerEvent`
+- `Dispose()` — unsubscribes + calls `RemovePlayer()` (cleanup on circuit disconnect)
+- `HandleGameEvent()` — pattern-matches on event type, updates local state, calls `StateHasChanged()`
+
+### `Home.razor.css` — Scoped styles
+
+CSS isolation — styles are automatically scoped to `Home.razor` at build time. Contains board, cell, button, and animation styles (identical visual design to the original).
 
 ---
 
@@ -117,60 +149,52 @@ Automatic SignalR override — fires on WebSocket drop. Cleans up player, notifi
 
 ```mermaid
 sequenceDiagram
-    participant A as Alice (Browser)
-    participant H as GameHub
+    participant A as Alice (Blazor)
     participant S as GameService
     participant G as Game
-    participant B as Bob (Browser)
+    participant B as Bob (Blazor)
 
-    A->>H: NewPlayer("Alice")
-    H->>S: AddPlayer(connA, "Alice")
+    A->>S: JoinGame(idA, "Alice")
     S->>G: new Game() + AddPlayer(alice)
     Note over G: Status: Waiting
-    H-->>A: WaitingForOpponent { gameCode }
+    S-->>A: WaitingForOpponentEvent { GameCode }
 
-    B->>H: NewPlayer("Bob")
-    H->>S: AddPlayer(connB, "Bob")
+    B->>S: JoinGame(idB, "Bob")
     S->>G: AddPlayer(bob)
     Note over G: Status: Playing (full)
-    H-->>A: PairPlayers { symbol:"x", yourTurn:true }
-    H-->>B: PairPlayers { symbol:"o", yourTurn:false }
+    S-->>A: GameStartedEvent { Symbol:"x", YourTurn:true }
+    S-->>B: GameStartedEvent { Symbol:"o", YourTurn:false }
 
-    A->>H: MakeTurn("c5")
-    H->>S: MakeTurn(connA, "c5")
+    A->>S: PlayTurn(idA, "c5")
     S->>G: MakeTurn(alice, "c5")
     Note over G: Field[c5] = "x"<br/>CurrentTurn → "o"
-    H-->>B: OpponentTurn { cellId:"c5" }
+    S-->>B: OpponentMovedEvent { CellId:"c5" }
 
-    B->>H: MakeTurn("c1")
-    H->>S: MakeTurn(connB, "c1")
+    B->>S: PlayTurn(idB, "c1")
     S->>G: MakeTurn(bob, "c1")
     Note over G: Field[c1] = "o"<br/>CurrentTurn → "x"
-    H-->>A: OpponentTurn { cellId:"c1" }
+    S-->>A: OpponentMovedEvent { CellId:"c1" }
 
     Note over A,B: ... turns continue ...
 
-    A->>H: MakeTurn("c9")
-    H->>S: MakeTurn(connA, "c9")
+    A->>S: PlayTurn(idA, "c9")
     S->>G: MakeTurn(alice, "c9")
     Note over G: CheckWinner() → WIN!<br/>Status: Finished
-    H-->>A: GameOver { result:"win", winningCells }
-    H-->>B: GameOver { result:"lose", winningCells }
+    S-->>A: GameOverEvent { Result:"win" }
+    S-->>B: GameOverEvent { Result:"lose" }
 ```
 
 ### Disconnect Flow
 
 ```mermaid
 sequenceDiagram
-    participant A as Alice
-    participant H as GameHub
+    participant A as Alice (Blazor)
     participant S as GameService
-    participant B as Bob
+    participant B as Bob (Blazor)
 
-    Note over A: Browser closes / network drops
-    H->>S: RemovePlayer(connA)
-    S-->>H: returns Bob (opponent)
-    H-->>B: OpponentDisconnected { message }
+    Note over A: Circuit drops / tab closes
+    A->>S: Dispose() → RemovePlayer(idA)
+    S-->>B: OpponentDisconnectedEvent { Message }
 ```
 
 ---
@@ -179,15 +203,19 @@ sequenceDiagram
 
 ```mermaid
 graph TD
-    CLIENT[wwwroot/index.html<br/>UI + SignalR JS client]
-    HUB[Hubs/GameHub.cs<br/>Transport layer]
-    SVC[Services/GameService.cs<br/>State + matchmaking]
+    APP[Components/App.razor<br/>Root HTML + Blazor bootstrap]
+    LAYOUT[Components/Layout/MainLayout.razor<br/>Shared layout]
+    PAGE[Components/Pages/Home.razor<br/>Game UI — all C#, no JS]
+    SVC[Services/GameService.cs<br/>State + matchmaking + events]
     GAME[Models/Game.cs<br/>Board + rules]
     PLAYER[Models/Player.cs<br/>Player data]
+    EVENTS[Models/GameEvents.cs<br/>Typed event records]
 
-    CLIENT <-->|WebSocket| HUB
-    HUB --> SVC
+    APP --> LAYOUT
+    LAYOUT --> PAGE
+    PAGE <-->|OnPlayerEvent| SVC
     SVC --> GAME
     SVC --> PLAYER
+    SVC --> EVENTS
     GAME --> PLAYER
 ```

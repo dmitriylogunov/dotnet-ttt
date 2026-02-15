@@ -1,0 +1,208 @@
+@page "/"
+@using TicTacToe.Services
+@using TicTacToe.Models
+@inject GameService GameService
+@implements IDisposable
+
+@if (screen == Screen.NameEntry)
+{
+    <div class="name-screen">
+        <p class="subtitle">Enter your name</p>
+        <input type="text"
+               class="name-input"
+               @bind="playerName"
+               @bind:event="oninput"
+               placeholder="Guest"
+               maxlength="20"
+               @onkeydown="OnNameKeyDown"
+               @ref="nameInputRef" />
+        <button class="menu-btn" @onclick="JoinGame">Play</button>
+    </div>
+}
+else
+{
+    <div class="game-screen">
+        <div class="status">@statusMessage</div>
+
+        <div class="board">
+            @for (int i = 1; i <= 9; i++)
+            {
+                var cellId = $"c{i}";
+                var value = board[cellId];
+                var cssClass = CellClass(cellId, value);
+
+                <button class="cell @cssClass"
+                        @onclick="() => OnCellClick(cellId)"
+                        disabled="@(!myTurn || !gameActive || value is not null)"
+                        aria-label="@($"Cell {i}")">
+                    @if (value is not null)
+                    {
+                        @Symbols[value]
+                    }
+                </button>
+            }
+        </div>
+
+        @if (gameCode is not null)
+        {
+            <div class="game-code">Game: @gameCode</div>
+        }
+
+        <button class="back-btn" @onclick="LeaveGame">Leave</button>
+    </div>
+}
+
+@code {
+    // ── Types ──
+    enum Screen { NameEntry, Game }
+
+    static readonly Dictionary<string, string> Symbols = new()
+    {
+        ["x"] = "✕",
+        ["o"] = "○"
+    };
+
+    // ── State ──
+    Screen screen = Screen.NameEntry;
+    string playerName = "";
+    string playerId = Guid.NewGuid().ToString();
+    string? mySymbol;
+    bool myTurn;
+    bool gameActive;
+    string statusMessage = "";
+    string? gameCode;
+    Dictionary<string, string?> board = NewBoard();
+    string[]? winningCells;
+    ElementReference nameInputRef;
+
+    static Dictionary<string, string?> NewBoard()
+    {
+        var b = new Dictionary<string, string?>();
+        for (int i = 1; i <= 9; i++) b[$"c{i}"] = null;
+        return b;
+    }
+
+    // ── Lifecycle ──
+    protected override void OnInitialized()
+    {
+        GameService.OnPlayerEvent += HandleGameEvent;
+    }
+
+    public void Dispose()
+    {
+        GameService.OnPlayerEvent -= HandleGameEvent;
+        GameService.RemovePlayer(playerId);
+    }
+
+    // ── Event handler (called from GameService on any thread) ──
+    void HandleGameEvent(string targetId, GameEvent evt)
+    {
+        if (targetId != playerId) return;
+
+        InvokeAsync(() =>
+        {
+            switch (evt)
+            {
+                case WaitingForOpponentEvent e:
+                    gameCode = e.GameCode;
+                    statusMessage = "Waiting for opponent…";
+                    break;
+
+                case GameStartedEvent e:
+                    mySymbol = e.Symbol;
+                    myTurn = e.YourTurn;
+                    gameActive = true;
+                    gameCode = e.GameCode;
+                    statusMessage = myTurn
+                        ? $"You are {Symbols[mySymbol]}. Your turn!"
+                        : $"You are {Symbols[mySymbol]}. {e.OpponentName}'s turn";
+                    break;
+
+                case OpponentMovedEvent e:
+                    var oppSymbol = mySymbol == "x" ? "o" : "x";
+                    board[e.CellId] = oppSymbol;
+                    myTurn = true;
+                    statusMessage = "Your turn!";
+                    break;
+
+                case GameOverEvent e:
+                    gameActive = false;
+                    myTurn = false;
+                    winningCells = e.WinningCells;
+                    statusMessage = e.Message;
+                    break;
+
+                case OpponentDisconnectedEvent e:
+                    gameActive = false;
+                    myTurn = false;
+                    statusMessage = e.Message;
+                    break;
+
+                case ServerFullEvent e:
+                    statusMessage = e.Message;
+                    break;
+
+                case TurnErrorEvent e:
+                    statusMessage = $"Error: {e.Error}";
+                    myTurn = true;
+                    break;
+            }
+
+            StateHasChanged();
+        });
+    }
+
+    // ── Actions ──
+    void JoinGame()
+    {
+        if (string.IsNullOrWhiteSpace(playerName))
+            playerName = "Guest";
+
+        board = NewBoard();
+        winningCells = null;
+        screen = Screen.Game;
+        statusMessage = "Looking for game…";
+
+        GameService.JoinGame(playerId, playerName);
+    }
+
+    void OnCellClick(string cellId)
+    {
+        if (!myTurn || !gameActive) return;
+        if (board[cellId] is not null) return;
+
+        // Optimistic local update
+        board[cellId] = mySymbol;
+        myTurn = false;
+        statusMessage = "Opponent's turn";
+
+        GameService.PlayTurn(playerId, cellId);
+    }
+
+    void LeaveGame()
+    {
+        gameActive = false;
+        GameService.RemovePlayer(playerId);
+        playerId = Guid.NewGuid().ToString(); // fresh id for next game
+        screen = Screen.NameEntry;
+    }
+
+    void OnNameKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") JoinGame();
+    }
+
+    // ── Helpers ──
+    string CellClass(string cellId, string? value)
+    {
+        var parts = new List<string>();
+        if (value is not null)
+        {
+            parts.Add("taken");
+            parts.Add(value);
+        }
+        if (winningCells?.Contains(cellId) == true)
+            parts.Add("win");
+        return string.Join(" ", parts);
+    }
+}

@@ -1,0 +1,115 @@
+/* ── Name entry ── */
+.subtitle {
+    margin-bottom: 10px;
+    color: #aaa;
+}
+
+.name-input {
+    width: 100%;
+    padding: 12px;
+    font-size: 1rem;
+    border: 2px solid #444;
+    border-radius: 8px;
+    background: #16213e;
+    color: #e0e0e0;
+    margin-bottom: 10px;
+    text-align: center;
+}
+.name-input:focus {
+    outline: none;
+    border-color: #e94560;
+}
+
+.menu-btn {
+    display: block;
+    width: 100%;
+    padding: 14px;
+    margin: 10px 0;
+    font-size: 1.1rem;
+    border: 2px solid #e94560;
+    background: transparent;
+    color: #e94560;
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+}
+.menu-btn:hover {
+    background: #e94560;
+    color: #fff;
+}
+
+/* ── Status ── */
+.status {
+    font-size: 1.1rem;
+    margin: 15px 0;
+    min-height: 24px;
+    color: #aaa;
+}
+
+/* ── Board ── */
+.board {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 4px;
+    max-width: 300px;
+    margin: 0 auto;
+}
+
+.cell {
+    aspect-ratio: 1;
+    background: #16213e;
+    border: none;
+    border-radius: 6px;
+    font-size: 2.5rem;
+    color: #e0e0e0;
+    cursor: pointer;
+    transition: background 0.15s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.cell:hover:not(.taken) {
+    background: #1a1a3e;
+}
+.cell.taken {
+    cursor: default;
+}
+.cell.x {
+    color: #e94560;
+}
+.cell.o {
+    color: #0f3460;
+}
+.cell.win {
+    background: #e9456033;
+    animation: pulse 0.6s ease-in-out 2;
+}
+.cell:disabled {
+    cursor: default;
+}
+
+@keyframes pulse {
+    50% { background: #e9456066; }
+}
+
+/* ── Back / info ── */
+.back-btn {
+    margin-top: 20px;
+    padding: 8px 20px;
+    background: transparent;
+    border: 1px solid #555;
+    color: #aaa;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9rem;
+}
+.back-btn:hover {
+    border-color: #e94560;
+    color: #e94560;
+}
+
+.game-code {
+    font-size: 0.8rem;
+    color: #555;
+    margin-top: 8px;
+}
