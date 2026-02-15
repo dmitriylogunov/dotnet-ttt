@@ -24,10 +24,16 @@ else
     <div class="game-screen">
         <div class="status">@statusMessage</div>
 
-        @if (gameActive && countdownValue > 0)
+        @if (gameActive && countdownValue > 0 && myTurn)
         {
             <div class="countdown-container">
                 <span class="countdown-number" @key="countdownKey">@countdownValue</span>
+            </div>
+        }
+        else if (gameActive && !myTurn)
+        {
+            <div class="countdown-container">
+                <span class="opponent-wait">Opponent's turn</span>
             </div>
         }
 
@@ -153,7 +159,7 @@ else
                     statusMessage = myTurn
                         ? $"You are {Symbols[mySymbol]}. Your turn!"
                         : $"You are {Symbols[mySymbol]}. {e.OpponentName}'s turn";
-                    StartCountdown();
+                    if (myTurn) StartCountdown(); else { StopCountdown(); countdownValue = 0; }
                     break;
 
                 case YourMoveClearedEvent e:
@@ -176,7 +182,7 @@ else
                     statusMessage = e.YourTurnNow
                         ? "Opponent timed out! Your turn!"
                         : "Time's up! Turn skipped.";
-                    StartCountdown();
+                    if (e.YourTurnNow) StartCountdown(); else { StopCountdown(); countdownValue = 0; }
                     break;
 
                 case GameOverEvent e:
@@ -236,8 +242,9 @@ else
 
         GameService.PlayTurn(playerId, cellId);
 
-        // Restart countdown for opponent's turn
-        StartCountdown();
+        // Stop countdown — it's now opponent's turn
+        StopCountdown();
+        countdownValue = 0;
     }
 
     void LeaveGame()

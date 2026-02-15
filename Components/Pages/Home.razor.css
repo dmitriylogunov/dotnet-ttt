@@ -72,6 +72,19 @@
     100% { transform: scale(2.8); opacity: 0; }
 }
 
+.opponent-wait {
+    font-size: 1.2rem;
+    font-weight: 600;
+    color: #7a8ba8;
+    animation: gentle-pulse 1.8s ease-in-out infinite;
+    user-select: none;
+}
+
+@keyframes gentle-pulse {
+    0%, 100% { color: #4a5a70; }
+    50%      { color: #a0b8d8; }
+}
+
 /* ── Board ── */
 .board {
     display: grid;
@@ -101,10 +114,10 @@
     cursor: default;
 }
 .cell.x {
-    color: #e94560;
+    color: #ff6b81;
 }
 .cell.o {
-    color: #0f3460;
+    color: #4fc3f7;
 }
 .cell.win {
     background: #e9456033;
